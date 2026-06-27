@@ -1,0 +1,67 @@
+name: rustix-auto-alive
+
+on:
+  # 定时触发（已停用，改由 Uptime Kuma 触发）
+  # schedule:
+  #   - cron: '0 */6 * * *'
+  # 支持手动触发
+  workflow_dispatch:
+  # 由 Uptime Kuma Webhook 触发（服务器离线时）
+  # 没有 uptime 可删除下面两行，并将定时触发重新启用
+  repository_dispatch:
+    types: [rustix]
+
+# 同一时间只允许一个实例运行
+concurrency:
+  group: rustix-auto
+  cancel-in-progress: false
+
+jobs:
+  rustix-alive:
+    # workflow_dispatch 始终执行；repository_dispatch 仅在 DOWN（msg 含 Down/DOWN/down）时执行
+    # 没有 uptime 可删除 if 条件
+    if: github.event_name != 'repository_dispatch' || contains(github.event.client_payload.msg, 'down') || contains(github.event.client_payload.msg, 'Down') || contains(github.event.client_payload.msg, 'DOWN')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: rustix-auto/requirements.txt
+
+      - name: 安装依赖
+        working-directory: rustix-auto
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 安装 Playwright 浏览器
+        run: python -m playwright install --with-deps chromium
+
+      - name: 运行自动启动脚本
+        working-directory: rustix-auto
+        env:
+          # 从 GitHub Secrets 读取账号，格式：邮箱:密码,邮箱:密码
+          # 例：a@example.com:pwd1,b@example.com:pwd2
+          ACCOUNTS: ${{ secrets.RUSTIX_ACCOUNTS }}
+          # Telegram 通知（可选，未配置 Secret 则不推送）
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python main.py
+
+      - name: 上传运行日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-log
+          path: |
+            rustix-auto/run.log
+            rustix-auto/debug_*.png
+          if-no-files-found: ignore
+          retention-days: 7
